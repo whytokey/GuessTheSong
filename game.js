@@ -102,7 +102,7 @@
             stats.roundsPlayed = Math.max(stats.roundsPlayed, data.roundsPlayed || 0);
             updateHomeStats();
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       // Подписка на паузу/резюме от платформы
@@ -114,9 +114,9 @@
       let preloader = Promise.resolve();
       try {
         if (sdk.ads?.preloader?.isSupported && await sdk.ads.preloader.canShow()) {
-          preloader = sdk.ads.preloader.show().catch(() => {});
+          preloader = sdk.ads.preloader.show().catch(() => { });
         }
-      } catch (e) {}
+      } catch (e) { }
 
       await Promise.all([catalogPromise, preloader]);
       updateLeaderboardUI();
@@ -134,7 +134,7 @@
   // === 2. FIREBASE НАСТРОЙКИ (ВКЛЮЧАЯ LEADERBOARD) ===
   let db = null;
   let myPlayerId = localStorage.getItem('gs5_uid') || Math.random().toString(36).substr(2, 9);
-  try { localStorage.setItem('gs5_uid', myPlayerId); } catch (e) {}
+  try { localStorage.setItem('gs5_uid', myPlayerId); } catch (e) { }
 
   let currentRoomId = null;
   let isHost = false;
@@ -204,13 +204,13 @@
     updateHomeStats();
 
     if (state.sdk?.player && typeof state.sdk.player.setData === 'function') {
-      state.sdk.player.setData(stats).catch(() => {});
+      state.sdk.player.setData(stats).catch(() => { });
     }
     if (stats.bestScore > 0 && !isMultiplayer) submitLeaderboardScore();
   }
 
   function updateHomeStats() {
-    $('bestScore').textContent = stats.bestScore.toLocaleString();$('bestStreak').innerHTML = `${stats.bestStreak} <small data-i18n="inARow">${t('inARow')}</small>`;
+    $('bestScore').textContent = stats.bestScore.toLocaleString(); $('bestStreak').innerHTML = `${stats.bestStreak} <small data-i18n="inARow">${t('inARow')}</small>`;
     $('roundsPlayed').textContent = stats.roundsPlayed;
   }
 
@@ -269,7 +269,7 @@
           name: name || current?.name || t('topAnon'),
           score: stats.bestScore,
           updatedAt: Date.now()
-        }).then(() => updateLeaderboardUI()).catch(() => {});
+        }).then(() => updateLeaderboardUI()).catch(() => { });
       }
     });
   }
@@ -294,7 +294,7 @@
         });
       }
       $('leaderboardContainer').innerHTML = html;
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   // === РЕКЛАМА ПИКАБУ ===
@@ -337,8 +337,8 @@
   });
 
   function showLobbyModal() {
-    $('mpTitle').textContent = t('mpTitleCustom');$('mpSelection').style.display = 'block';
-    $('mpLobby').style.display = 'none';$('mpModal').classList.add('open');
+    $('mpTitle').textContent = t('mpTitleCustom'); $('mpSelection').style.display = 'block';
+    $('mpLobby').style.display = 'none'; $('mpModal').classList.add('open');
   }
 
   $('btnCreateRoom').addEventListener('click', () => {
@@ -358,7 +358,7 @@
   });
 
   function startMatchmaking() {
-    $('mpTitle').textContent = t('mpTitle1v1');$('mpSelection').style.display = 'none'; $('mpLobby').style.display = 'block';$('mpCodeBlock').style.display = 'none'; $('btnStartMp').style.display = 'none';$('mpPlayersList').innerHTML = '<div style="text-align:center; margin:20px 0;"><div class="loading-dots" style="color:var(--violet); transform:scale(1.5);"><i></i><i></i><i></i></div></div>';
+    $('mpTitle').textContent = t('mpTitle1v1'); $('mpSelection').style.display = 'none'; $('mpLobby').style.display = 'block'; $('mpCodeBlock').style.display = 'none'; $('btnStartMp').style.display = 'none'; $('mpPlayersList').innerHTML = '<div style="text-align:center; margin:20px 0;"><div class="loading-dots" style="color:var(--violet); transform:scale(1.5);"><i></i><i></i><i></i></div></div>';
     $('mpModal').classList.add('open');
 
     db.ref('rooms').orderByChild('type').equalTo('1v1').once('value', snap => {
@@ -379,9 +379,9 @@
 
   function joinRoomFirebase(roomId, roomType) {
     isMultiplayer = true; inMultiplayerMatch = false;
-    $('mpSelection').style.display = 'none';$('mpLobby').style.display = 'block';
+    $('mpSelection').style.display = 'none'; $('mpLobby').style.display = 'block';
     if (roomType === 'custom') {
-      $('mpCodeBlock').style.display = 'block';$('mpRoomCodeDisplay').textContent = roomId;
+      $('mpCodeBlock').style.display = 'block'; $('mpRoomCodeDisplay').textContent = roomId;
     }
 
     mpRoomRef = db.ref('rooms/' + roomId);
@@ -421,7 +421,7 @@
           state.queue = data.sharedQueue;
           resetGameData();
           $('mpScoreBoard').style.display = 'block';
-          $('formulaCard').style.display = 'none';$('catalogCard').style.display = 'none';
+          $('formulaCard').style.display = 'none'; $('catalogCard').style.display = 'none';
           setScreen('game');
           db.ref(`rooms/${currentRoomId}/players/${myPlayerId}`).update({ roundState: 0 });
           nextRound();
@@ -465,7 +465,7 @@
   function startGameSolo() {
     if (state.catalog.length < 4) { toast(t('errCat')); return; }
     isMultiplayer = false; state.queue = shuffle(state.catalog).slice(0, CONFIG.roundsPerGame); resetGameData();
-    $('mpScoreBoard').style.display = 'none'; $('formulaCard').style.display = 'block';$('catalogCard').style.display = 'block';
+    $('mpScoreBoard').style.display = 'none'; $('formulaCard').style.display = 'block'; $('catalogCard').style.display = 'block';
     setScreen('game'); nextRound();
   }
 
@@ -485,71 +485,166 @@
 
   function askRevive() {
     if (isMultiplayer) return finishGame();
-    $('modalTitle').textContent = t('modalRevive'); $('modalText').textContent = t('modalReviveText');$('modalActions').innerHTML = `<button id="btnRevive" class="primary-btn" type="button">${t('btnRevive')}</button><button id="btnDie" class="secondary-btn" type="button">${t('btnGiveUp')}</button>`;
+    $('modalTitle').textContent = t('modalRevive'); $('modalText').textContent = t('modalReviveText'); $('modalActions').innerHTML = `<button id="btnRevive" class="primary-btn" type="button">${t('btnRevive')}</button><button id="btnDie" class="secondary-btn" type="button">${t('btnGiveUp')}</button>`;
     $('modal').classList.add('open');
-    $('btnRevive').onclick = () => {$('modal').classList.remove('open'); showRewardedAd(() => { state.reviveUsed = true; state.lives = 1; updateHearts(); nextRound(); }, () => finishGame()); };
-    $('btnDie').onclick = () => {$('modal').classList.remove('open'); finishGame(); };
+    $('btnRevive').onclick = () => { $('modal').classList.remove('open'); showRewardedAd(() => { state.reviveUsed = true; state.lives = 1; updateHearts(); nextRound(); }, () => finishGame()); };
+    $('btnDie').onclick = () => { $('modal').classList.remove('open'); finishGame(); };
   }
 
   function askQuit() {
-    $('modalTitle').textContent = t('modalQuit'); $('modalText').textContent = t('modalQuitText');$('modalActions').innerHTML = `<button id="btnConfirmQuit" class="primary-btn" type="button" style="background:var(--danger)">${t('btnQuitYes')}</button><button id="btnCancelQuit" class="secondary-btn" type="button">${t('btnQuitNo')}</button>`;
+    $('modalTitle').textContent = t('modalQuit'); $('modalText').textContent = t('modalQuitText'); $('modalActions').innerHTML = `<button id="btnConfirmQuit" class="primary-btn" type="button" style="background:var(--danger)">${t('btnQuitYes')}</button><button id="btnCancelQuit" class="secondary-btn" type="button">${t('btnQuitNo')}</button>`;
     $('modal').classList.add('open');
-    $('btnConfirmQuit').onclick = () => {$('modal').classList.remove('open'); clearTimer(); try { audio.pause(); } catch (e) { } if (isMultiplayer) leaveLobby(); else setScreen('home'); };
-    $('btnCancelQuit').onclick = () => {$('modal').classList.remove('open'); };
+    $('btnConfirmQuit').onclick = () => { $('modal').classList.remove('open'); clearTimer(); try { audio.pause(); } catch (e) { } if (isMultiplayer) leaveLobby(); else setScreen('home'); };
+    $('btnCancelQuit').onclick = () => { $('modal').classList.remove('open'); };
   }
+
+  // function nextRound() {
+  //   clearTimer(); state.answered = false; state.clipStarted = false; state.hintUsed = false;
+  //   if (state.lives <= 0 && !isMultiplayer) { if (!state.reviveUsed) return askRevive(); return finishGame(); }
+  //   if (state.round >= CONFIG.roundsPerGame) return finishGame();
+
+  //   state.current = state.queue[state.round]; state.round++;
+  //   $('roundKicker').textContent = t('round', state.round, CONFIG.roundsPerGame); $('streakLabel').textContent = t('streak', state.streak);
+  //   $('roundStatus').textContent = t('statusWait'); $('questionSub').textContent = state.usingDemo ? t('statusDemo') : t('statusReady');
+  //   $('timeProgress').style.width = '0\%'; $('playClipBtn').textContent = t('btnPlay');
+  //   $('playClipBtn').disabled = false; $('hintBtn').disabled = isMultiplayer;
+
+  //   renderCover(state.current); buildOptions(state.current);
+  //   if (state.current.previewUrl) { audio.src = state.current.previewUrl; audio.load(); } else audio.removeAttribute('src');
+  // }
 
   function nextRound() {
     clearTimer(); state.answered = false; state.clipStarted = false; state.hintUsed = false;
     if (state.lives <= 0 && !isMultiplayer) { if (!state.reviveUsed) return askRevive(); return finishGame(); }
     if (state.round >= CONFIG.roundsPerGame) return finishGame();
 
-    state.current = state.queue[state.round]; state.round++;
-    $('roundKicker').textContent = t('round', state.round, CONFIG.roundsPerGame);$('streakLabel').textContent = t('streak', state.streak);
-    $('roundStatus').textContent = t('statusWait');$('questionSub').textContent = state.usingDemo ? t('statusDemo') : t('statusReady');
-    $('timeProgress').style.width = '0\%';$('playClipBtn').textContent = t('btnPlay');
-    $('playClipBtn').disabled = false; $('hintBtn').disabled = isMultiplayer;
+    state.round++;
 
-    renderCover(state.current); buildOptions(state.current);
-    if (state.current.previewUrl) { audio.src = state.current.previewUrl; audio.load(); } else audio.removeAttribute('src');
+    // В мультиплеере хост управляет очередью, либо трек синхронизируется через Firebase
+    state.current = state.queue[state.round - 1];
+
+    $('roundKicker').textContent = t('round', state.round, CONFIG.roundsPerGame);
+    $('streakLabel').textContent = t('streak', state.streak);
+    $('roundStatus').textContent = t('statusWait');
+    $('questionSub').textContent = state.usingDemo ? t('statusDemo') : t('statusReady');
+    $('timeProgress').style.width = '0%';
+    $('playClipBtn').textContent = t('btnPlay');
+    $('playClipBtn').disabled = false;
+    $('hintBtn').disabled = isMultiplayer;
+
+    renderCover(state.current);
+    buildOptions(state.current);
+
+    if (state.current && state.current.previewUrl) {
+      audio.src = state.current.previewUrl;
+      audio.load();
+    } else {
+      audio.removeAttribute('src');
+    }
   }
 
-  function clearTimer() { clearInterval(state.timer); state.timer = null; $('soundWave').classList.remove('playing'); const vinyl =$('vinylSvg'); if (vinyl) vinyl.style.animation = 'none'; }
+  function clearTimer() { clearInterval(state.timer); state.timer = null; $('soundWave').classList.remove('playing'); const vinyl = $('vinylSvg'); if (vinyl) vinyl.style.animation = 'none'; }
+
+  // function playClip() {
+  //   if (state.timer || state.answered) return;
+  //   if (isMultiplayer && state.round === 1 && audio.src) { audio.play().catch(() => { }); audio.pause(); }
+
+  //   state.clipStarted = true; $('playClipBtn').disabled = true; $('playClipBtn').textContent = t('btnPlaying'); $('roundStatus').textContent = t('statusListen'); $('soundWave').classList.add('playing');
+  //   const vinyl = $('vinylSvg'); if (vinyl) vinyl.style.animation = 'spin 2s linear infinite';
+
+  //   if (audio.src) {
+  //     audio.currentTime = 0;
+  //     audio.play().catch((e) => {
+  //       clearTimer(); state.clipStarted = false;
+  //       if (isMultiplayer) {
+  //         toast(t('errTrackBreak')); $('playClipBtn').textContent = t('btnBreak'); $('roundStatus').textContent = t('statusChoose');
+  //       } else {
+  //         toast(t('errReplace')); state.round--; state.queue.splice(state.round, 1); state.queue.push(state.catalog[Math.floor(Math.random() * state.catalog.length)]); nextRound(); setTimeout(playClip, 100);
+  //       }
+  //     });
+  //   } else { toast(t('errAudio')); }
+
+  //   const started = performance.now();
+  //   state.timer = setInterval(() => {
+  //     const pct = Math.min(100, ((performance.now() - started) / (CONFIG.clipSeconds * 1000)) * 100);
+  //     $('timeProgress').style.width = `${pct}%`;
+  //     if (pct >= 100) {
+  //       clearTimer(); try { audio.pause(); } catch { }
+
+  //       if (isMultiplayer && !state.answered) {
+  //         state.answered = true;
+  //         document.querySelectorAll('.answer-btn').forEach(btn => btn.disabled = true);
+  //         state.streak = 0;
+  //         $('streakLabel').textContent = t('streak', state.streak); $('roundStatus').textContent = t('statusTimeOut');
+  //         if (mpRoomRef) { mpRoomRef.child('players/' + myPlayerId).update({ score: state.score, roundState: state.round }); }
+  //       } else if (!isMultiplayer) {
+  //         $('roundStatus').textContent = t('statusEnd');
+  //         $('playClipBtn').disabled = false; $('playClipBtn').textContent = t('btnListenAgain');
+  //       }
+  //     }
+  //   }, 80);
+  // }
 
   function playClip() {
     if (state.timer || state.answered) return;
-    if (isMultiplayer && state.round === 1 && audio.src) { audio.play().catch(() => { }); audio.pause(); }
 
-    state.clipStarted = true; $('playClipBtn').disabled = true; $('playClipBtn').textContent = t('btnPlaying'); $('roundStatus').textContent = t('statusListen');$('soundWave').classList.add('playing');
-    const vinyl = $('vinylSvg'); if (vinyl) vinyl.style.animation = 'spin 2s linear infinite';
+    state.clipStarted = true;
+    $('playClipBtn').disabled = true;
+    $('playClipBtn').textContent = t('btnPlaying');
+    $('roundStatus').textContent = t('statusListen'); $('soundWave').classList.add('playing');
+
+    const vinyl = $('vinylSvg');
+    if (vinyl) vinyl.style.animation = 'spin 2s linear infinite';
 
     if (audio.src) {
       audio.currentTime = 0;
       audio.play().catch((e) => {
-        clearTimer(); state.clipStarted = false;
+        clearTimer();
+        state.clipStarted = false;
+
+        // Если аудиофайл не запустился (ошибка кодека или файла нет в папке)
+        toast(t('errTrackBreak'));
+
         if (isMultiplayer) {
-          toast(t('errTrackBreak')); $('playClipBtn').textContent = t('btnBreak');$('roundStatus').textContent = t('statusChoose');
+          // В мультиплеере принудительно завершаем раунд таймаутом, чтобы не стопорить соперника
+          state.answered = true;
+          document.querySelectorAll('.answer-btn').forEach(btn => btn.disabled = true);
+          $('roundStatus').textContent = t('errBreak');
+          if (mpRoomRef) {
+            mpRoomRef.child('players/' + myPlayerId).update({ score: state.score, roundState: state.round });
+          }
         } else {
-          toast(t('errReplace')); state.round--; state.queue.splice(state.round, 1); state.queue.push(state.catalog[Math.floor(Math.random() * state.catalog.length)]); nextRound(); setTimeout(playClip, 100);
+          // В соло — просто переходим к следующему треку
+          state.round--;
+          state.queue.splice(state.round, 1);
+          state.queue.push(state.catalog[Math.floor(Math.random() * state.catalog.length)]);
+          nextRound();
+          setTimeout(playClip, 100);
         }
       });
-    } else { toast(t('errAudio')); }
+    } else {
+      toast(t('errAudio'));
+    }
 
     const started = performance.now();
     state.timer = setInterval(() => {
       const pct = Math.min(100, ((performance.now() - started) / (CONFIG.clipSeconds * 1000)) * 100);
       $('timeProgress').style.width = `${pct}%`;
       if (pct >= 100) {
-        clearTimer(); try { audio.pause(); } catch { }
+        clearTimer();
+        try { audio.pause(); } catch { }
 
         if (isMultiplayer && !state.answered) {
           state.answered = true;
           document.querySelectorAll('.answer-btn').forEach(btn => btn.disabled = true);
           state.streak = 0;
-          $('streakLabel').textContent = t('streak', state.streak);$('roundStatus').textContent = t('statusTimeOut');
-          if (mpRoomRef) { mpRoomRef.child('players/' + myPlayerId).update({ score: state.score, roundState: state.round }); }
+          $('streakLabel').textContent = t('streak', state.streak); $('roundStatus').textContent = t('statusTimeOut');
+          if (mpRoomRef) {
+            mpRoomRef.child('players/' + myPlayerId).update({ score: state.score, roundState: state.round });
+          }
         } else if (!isMultiplayer) {
-          $('roundStatus').textContent = t('statusEnd');
-          $('playClipBtn').disabled = false; $('playClipBtn').textContent = t('btnListenAgain');
+          $('roundStatus').textContent = t('statusEnd'); $('playClipBtn').disabled = false;
+          $('playClipBtn').textContent = t('btnListenAgain');
         }
       }
     }, 80);
@@ -572,7 +667,7 @@
       state.streak = 0; $('roundStatus').textContent = `${t('wrong')} «${state.current.trackName}»`; updateHearts();
     }
 
-    $('scoreLabel').textContent = state.score.toLocaleString(); $('streakLabel').textContent = t('streak', state.streak);$('hintBtn').disabled = true;
+    $('scoreLabel').textContent = state.score.toLocaleString(); $('streakLabel').textContent = t('streak', state.streak); $('hintBtn').disabled = true;
 
     if (isMultiplayer && mpRoomRef) {
       mpRoomRef.child('players/' + myPlayerId).update({ score: state.score, roundState: state.round });
@@ -596,7 +691,7 @@
     clearTimer();
     if (!isMultiplayer) {
       stats.bestScore = Math.max(stats.bestScore, state.score); stats.bestStreak = Math.max(stats.bestStreak, state.bestStreak); stats.roundsPlayed++; saveStats();
-      $('finalScore').textContent = state.score.toLocaleString();$('finalCorrect').textContent = `${state.correct}/${CONFIG.roundsPerGame}`; $('finalStreak').textContent = state.bestStreak; $('finalMultiplier').textContent = `×${state.bestStreak >= 5 ? 3 : state.bestStreak >= 3 ? 2 : 1}`;
+      $('finalScore').textContent = state.score.toLocaleString(); $('finalCorrect').textContent = `${state.correct}/${CONFIG.roundsPerGame}`; $('finalStreak').textContent = state.bestStreak; $('finalMultiplier').textContent = `×${state.bestStreak >= 5 ? 3 : state.bestStreak >= 3 ? 2 : 1}`;
       $('resultTitle').textContent = state.lives <= 0 ? t('titleNoLives') : t('titleRoundEnd');
       $('resultCopy').textContent = state.score > stats.bestScore - 1 ? t('resNewRecord') : t('resGood');
       setScreen('result'); if (stats.roundsPlayed % 3 === 0) setTimeout(showFullscreenAd, 350);

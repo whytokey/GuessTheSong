@@ -986,6 +986,18 @@ h1 {
     }
 }
 
+[hidden] { display: none !important; }
+button:disabled { opacity: .5; cursor: not-allowed; transform: none !important; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--orange); outline-offset: 3px; }
+.game-footer { flex-wrap: wrap; }
+#mpRoomInput { min-width: 0; width: 100%; }
+#mpPlayersList { max-height: 40vh !important; }
+#networkStatus { min-height: 18px; }
+.toast { max-width: min(92vw, 560px); text-align: center; }
+.modal-card { max-height: calc(100dvh - 40px); overflow: auto; }
+.mp-player span:first-child, .mp-score-item span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.mp-player { gap: 10px; }
+
 .mp-player {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--line);

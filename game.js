@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // Protocol 2: all participants must use this version. No changes to HTML/CSS required.
+  // Release 3.0.1 / room protocol 3. All participants must use this version.
   const CONFIG = Object.freeze({ rounds: 10, clip: 5, lives: 3, roundMs: 45000,
     revealMs: 1600, loadMs: 12000, stallMs: 8000, networkMs: 10000,
     heartbeatMs: 5000, staleMs: 25000, maxPlayers: 8 });
@@ -34,10 +34,25 @@
       timer = setTimeout(() => reject(new Error('TIMEOUT')), ms);
     })]).finally(() => clearTimeout(timer));
   }
+  // Keep an active listener until the server acknowledges the transaction.
+  // once('value') alone can release the cache before transaction's first callback.
+  // applyLocally=false prevents UI from starting a match on a speculative write.
+  async function roomTransaction(ref, update) {
+    let listener;
+    try {
+      await bounded(new Promise((resolve, reject) => {
+        listener = snap => resolve(snap);
+        ref.on('value', listener, reject);
+      }));
+      return await ref.transaction(update, undefined, false);
+    } finally {
+      if (listener) ref.off('value', listener);
+    }
+  }
   async function transactWithRollback(ref, update, rollback, label) {
     // Firebase writes cannot be aborted by Promise.race. If the local timeout wins,
     // observe the original transaction and compensate if it commits later.
-    const request = ref.transaction(update);
+    const request = roomTransaction(ref, update);
     try {
       return await bounded(request);
     } catch (error) {
@@ -50,7 +65,7 @@
     }
   }
   function removeCancelledParticipant(ref) {
-    return ref.transaction(data => {
+    return roomTransaction(ref, data => {
       const players = data?.players;
       if (!players?.[clientId]) return;
       delete players[clientId];
@@ -312,7 +327,7 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CONFIG.loadMs);
     try {
-      const response = await fetch('catalog.json', { signal: controller.signal });
+      const response = await fetch('catalog.json', { signal: controller.signal, cache: 'no-store' });
       if (!response.ok) throw new Error(`HTTP_${response.status}`);
       const data = await response.json();
       if (!Array.isArray(data)) throw new Error('CATALOG_NOT_ARRAY');
@@ -499,9 +514,14 @@
     enableAnswers();
   }
 
-  // Firebase protocol 2. Root transactions serialize joins, submissions and round transitions.
+  // Firebase protocol 3. Every normal room write is one root transaction.
+  // Never use set/update/child transactions inside this subtree: they can cancel
+  // pending ancestor transactions in the Firebase client.
   // This is reliability logic, NOT anti-cheat; production authorization belongs in RTDB rules/backend.
   function networkButtons() {
+    text('networkStatus', connected && db ? 'Мультиплеер подключён · версия 3.0.1' :
+      db ? 'Мультиплеер: подключаемся к серверу…' : 'Мультиплеер недоступен: сервер не подключён. Одиночная игра работает.');
+    if ($('networkStatus')) $('networkStatus').className = `status-chip ${connected && db ? 'online' : 'warn'}`;
     ['btn1v1', 'btnCustom'].forEach(id => {
       $(id).disabled = !db || !connected || state.catalog.length < 4 || lobbyBusy || adShowing;
       $(id).title = !connected ? 'Нет соединения с сервером' : '';
@@ -541,7 +561,11 @@
   function roomError(r, error) {
     report('Firebase room operation', error);
     if (room !== r) return;
-    toast('Сбой соединения или доступа к Firebase. Выйди и подключись заново.');
+    const code = String(error?.code || error?.message || '');
+    toast(/permission|denied/i.test(code) ? 'Firebase запретил доступ. Владельцу игры нужно проверить правила Realtime Database.' :
+      code === 'ROOM_VERSION_MISMATCH' ? 'Версии игры различаются. Обнови страницу и создай новую комнату.' :
+      code === 'TIMEOUT' ? 'Сервер не подтвердил действие вовремя. Подключись к комнате заново.' :
+      'Сбой соединения с комнатой. Выйди и подключись заново.');
     leaveRoom();
   }
   function lobbyControls(busy) {
@@ -566,11 +590,9 @@
       if (task !== lobbyTask || !connected) throw new Error('CANCELLED');
       const id = String(Math.floor(100000 + Math.random() * 900000));
       const ref = db.ref(`rooms/${id}`);
-      await bounded(ref.once('value'));
-      if (task !== lobbyTask || !connected) throw new Error('CANCELLED');
       const result = await transactWithRollback(ref, data => {
-        if (data !== null) return;
-        return { protocol: 2, type, state: 'waiting', host: clientId, createdAt: now(),
+        if (task !== lobbyTask || !connected || data !== null) return;
+        return { protocol: 3, type, state: 'waiting', host: clientId, createdAt: now(),
           players: { [clientId]: playerRecord() } };
       }, () => removeCancelledParticipant(ref), 'Room creation');
       if (result.committed) {
@@ -585,18 +607,19 @@
   }
   async function joinRoom(id, type, task) {
     const ref = db.ref(`rooms/${id}`);
-    await bounded(ref.once('value'));
     if (task !== lobbyTask || !connected) throw new Error('CANCELLED');
     let reason = 'Комната недоступна.';
     const result = await transactWithRollback(ref, data => {
-      if (!data) { reason = 'Комната не найдена.'; return; }
-      if (data.protocol !== 2) { reason = 'В комнате старая версия игры. Создай новую комнату.'; return; }
+      if (task !== lobbyTask || !connected) return;
+      if (!data) { reason = 'Комната не найдена. Проверь код и одинаковую версию игры.'; return; }
+      if (data.protocol !== 3) { reason = 'Разные версии игры. Всем нужно обновить страницу и создать новую комнату.'; return; }
       if (data.state !== 'waiting') { reason = 'Игра уже началась.'; return; }
       if (data.type !== type) { reason = 'Неверный тип комнаты.'; return; }
       const players = data.players || {};
-      // Purge abandoned lobby entries only, never scores from an ongoing match.
+      // `onDisconnect` marks a brief network interruption offline immediately.
+      // Keep that participant for the stale interval so reconnect can restore it.
       Object.entries(players).forEach(([key, p]) => {
-        if (p.online === false || now() - Number(p.lastSeen || 0) >= CONFIG.staleMs) delete players[key];
+        if (now() - Number(p.lastSeen || 0) >= CONFIG.staleMs) delete players[key];
       });
       const limit = type === '1v1' ? 2 : CONFIG.maxPlayers;
       if (Object.keys(players).length >= limit) { reason = 'Комната заполнена.'; return; }
@@ -617,7 +640,10 @@
     try { await action(task); }
     catch (error) {
       report('Create/join room', error);
-      if (task === lobbyTask) toast(error.message === 'TIMEOUT' ? 'Сервер не ответил вовремя. Проверь подключение.' : error.message);
+      if (task === lobbyTask) toast(/permission|denied/i.test(String(error.code || error.message)) ?
+        'Firebase запретил доступ к комнатам. Нужна проверка правил базы владельцем игры.' :
+        error.message === 'TIMEOUT' ? 'Сервер не ответил вовремя. Проверь подключение.' :
+        error.message === 'CANCELLED' ? 'Подключение отменено.' : error.message);
     } finally { if (task === lobbyTask) lobbyControls(false); }
   }
   async function matchmaking(task) {
@@ -625,7 +651,7 @@
     const candidates = [];
     snap.forEach(child => {
       const data = child.val();
-      if (data?.protocol === 2 && data.state === 'waiting' && activePlayers(data).length === 1) candidates.push(child.key);
+      if (data?.protocol === 3 && data.state === 'waiting' && activePlayers(data).length === 1) candidates.push(child.key);
     });
     for (const id of shuffle(candidates)) {
       if (task !== lobbyTask) return;
@@ -636,16 +662,24 @@
   }
   async function armPresence(r) {
     if (room !== r || !connected) return;
-    await bounded(r.ref.child(`players/${clientId}`).onDisconnect().update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP }));
+    const hook = r.ref.child(`players/${clientId}`).onDisconnect();
+    const request = hook.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    // A registration may complete after leaving the lobby. Do not leave a stale hook.
+    Promise.resolve(request).then(() => {
+      if (room !== r) return hook.cancel();
+    }).catch(error => report('Presence registration', error));
+    await bounded(request);
   }
   async function heartbeat(r) {
     if (room !== r || !connected || r.heartbeatBusy || r.data?.state === 'finished') return;
     r.heartbeatBusy = true;
     try {
       // A transaction cannot recreate a player after the room has been deleted.
-      await bounded(r.ref.child(`players/${clientId}`).transaction(p => {
-        if (!p) return;
-        p.online = true; p.lastSeen = now(); return p;
+      await bounded(roomTransaction(r.ref, data => {
+        if (room !== r || !connected || !data?.players?.[clientId] || data.state === 'finished') return;
+        data.players[clientId].online = true;
+        data.players[clientId].lastSeen = now();
+        return data;
       }));
     } catch (error) { roomError(r, error); }
     finally { r.heartbeatBusy = false; }
@@ -653,8 +687,10 @@
   async function attachRoom(id, type, task) {
     if (task !== lobbyTask) return;
     endSession();
+    // A new room must not inherit an outstanding answer or platform pause.
+    resumeAudio('network');
     const r = { id, type, ref: db.ref(`rooms/${id}`), epoch: ++roomEpoch, data: null,
-      pending: false, starting: false, heartbeatBusy: false, matchId: null, finished: false };
+      pending: false, starting: false, submitting: null, heartbeatBusy: false, matchId: null, finished: false };
     room = r; displayLobby(r);
     r.listener = snap => {
       if (room !== r) return;
@@ -671,6 +707,7 @@
   }
   function renderRoom(r) {
     const data = r.data, players = data.players || {};
+    if (data.protocol !== 3) throw new Error('ROOM_VERSION_MISMATCH');
     if (data.state === 'waiting') {
       const live = activePlayers(data), liveIds = new Set(live.map(([id]) => id));
       html('mpPlayersList', Object.entries(players).map(([id, p]) =>
@@ -712,6 +749,16 @@
     } else if (data.revealAt) {
       state.answered = true; stopAudio(); enableAnswers(); $('playClipBtn').disabled = true; skipBtn.hidden = true;
       text('roundStatus', 'Время раунда завершено. Следующий трек…');
+    } else if (r.submitting !== data.round) {
+      // A non-committed answer must not leave the controls permanently locked.
+      state.answered = false;
+      if (state.phase === 'submitting') {
+        state.phase = state.heard ? 'ended' : 'ready';
+        text('questionSub', state.heard ? 'Ответ не сохранён. Выбери вариант ещё раз.' : 'Нажми «Слушать», чтобы включить фрагмент.');
+        text('playClipBtn', state.heard ? '↻ Послушать ещё' : '▶ Слушать 5 сек');
+        $('playClipBtn').disabled = false;
+      }
+      enableAnswers();
     }
     roomTick(r);
   }
@@ -720,18 +767,24 @@
     if (!r || r.starting || !connected || r.data?.state !== 'waiting' || r.data.host !== clientId) return;
     if (activePlayers(r.data).length < 2) return toast('Нужно хотя бы два игрока.');
     if (state.catalog.length < 4) return toast('Каталог ещё не готов.');
-    r.starting = true; $('btnStartMp').disabled = true;
+    r.starting = true; $('btnStartMp').disabled = true; text('btnStartMp', 'Запускаем матч…');
     const queue = shuffle(state.catalog).slice(0, CONFIG.rounds).map(answer => ({ answer, options: optionsFor(answer) }));
     const matchId = uid();
     try {
-      await bounded(r.ref.transaction(data => {
-        if (!data || data.state !== 'waiting' || data.host !== clientId || activePlayers(data).length < 2) return;
+      const result = await bounded(roomTransaction(r.ref, data => {
+        if (room !== r || !connected || !data || data.protocol !== 3 || data.state !== 'waiting' || data.host !== clientId || activePlayers(data).length < 2) return;
         data.state = 'playing'; data.matchId = matchId; data.sharedQueue = queue;
         data.round = 1; data.deadline = now() + CONFIG.roundMs; data.revealAt = 0;
         Object.values(data.players || {}).forEach(p => {
           p.score = 0; p.streak = 0; p.bestStreak = 0; p.correct = 0; delete p.answers;
         }); return data;
       }));
+      if (room === r && !result.committed) {
+        const latest = result.snapshot.val();
+        if (latest?.players?.[clientId]) { r.data = latest; renderRoom(r); }
+        else { toast('Комната закрыта. Создай новую.'); leaveRoom(); return; }
+        if (latest.state === 'waiting') toast('Матч не запущен: проверь, что в комнате хотя бы два игрока в сети.');
+      }
     } catch (error) { roomError(r, error); }
     finally { r.starting = false; if (room === r && r.data?.state === 'waiting') renderRoom(r); }
   }
@@ -748,15 +801,16 @@
   }
   async function submitMp(index, reason) {
     const r = room;
-    if (!r || !state.active || state.answered || !connected || r.data?.state !== 'playing') return;
+    if (!r || r.submitting !== null || !state.active || state.answered || !connected || r.data?.state !== 'playing') return;
     const round = state.round, matchId = r.matchId, token = state.token;
     if (now() >= r.data.deadline || r.data.revealAt) return roomTick(r);
+    r.submitting = round;
     state.answered = true; stopAudio(); state.phase = 'submitting';
     enableAnswers(); $('playClipBtn').disabled = true; skipBtn.hidden = true;
     text('roundStatus', 'Сохраняем ответ…');
     try {
-      const result = await bounded(r.ref.transaction(data => {
-        if (!data || data.state !== 'playing' || data.matchId !== matchId || data.round !== round ||
+      const result = await bounded(roomTransaction(r.ref, data => {
+        if (room !== r || !connected || !data || data.state !== 'playing' || data.matchId !== matchId || data.round !== round ||
             data.revealAt || now() >= data.deadline || !data.players?.[clientId]) return;
         const entry = data.sharedQueue[round - 1];
         if (reason === 'answer' && (!Number.isInteger(index) || !entry.options[index])) return;
@@ -765,11 +819,12 @@
         return data;
       }));
       if (room !== r || token !== state.token) return;
-      if (!result.committed) {
-        r.data = result.snapshot.val();
-        if (r.data?.players?.[clientId]) renderRoom(r); else leaveRoom();
-      }
+      r.submitting = null;
+      // The snapshot is authoritative for both committed and aborted transactions.
+      r.data = result.snapshot.val();
+      if (r.data?.players?.[clientId]) renderRoom(r); else leaveRoom();
     } catch (error) { roomError(r, error); }
+    finally { r.submitting = null; }
   }
   async function roomTick(r) {
     if (room !== r || !connected || !r.data || r.pending || r.finished) return;
@@ -788,8 +843,8 @@
     const expectedRound = data.round || 0, matchId = data.matchId || null;
     try {
       // Any connected participant may progress a round: the host is not a single point of failure.
-      await bounded(r.ref.transaction(current => {
-        if (!current || !current.players?.[clientId] || current.state !== data.state ||
+      await bounded(roomTransaction(r.ref, current => {
+        if (room !== r || !connected || !current || !current.players?.[clientId] || current.state !== data.state ||
             (current.matchId || null) !== matchId || (current.round || 0) !== expectedRound) return;
         let changed = false;
         const active = activePlayers(current), keys = active.map(([id]) => id).sort();
@@ -833,8 +888,16 @@
       clearInterval(r.tick); clearInterval(r.heartbeat); clearTimeout(r.offlineTimer);
       r.ref.off('value', r.listener);
       // Never remove the whole room when the host leaves. Preserve scores and elect a new host.
-      const p = r.ref.child(`players/${clientId}`);
-      p.update({ online: false }).then(() => p.onDisconnect().cancel()).catch(error => report('Leave room presence', error));
+      // Same root as start/join/submit; do not cancel those with a child update.
+      roomTransaction(r.ref, data => {
+        if (!data?.players?.[clientId]) return;
+        data.players[clientId].online = false;
+        data.players[clientId].lastSeen = now();
+        const live = activePlayers(data).map(([id]) => id).sort();
+        if (!live.includes(data.host) && live.length) data.host = live[0];
+        return data;
+      }).then(() => r.ref.child(`players/${clientId}`).onDisconnect().cancel())
+        .catch(error => report('Leave room presence (onDisconnect remains armed)', error));
     }
     resumeAudio('network');
     if (goHome) screen('home');

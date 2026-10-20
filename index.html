@@ -11,7 +11,7 @@
   <script src="https://games.pikabu.ru/sdk/sdk.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=3.0.1">
 </head>
 <body>
   <main class="app-shell">
@@ -41,6 +41,7 @@
                 <button class="secondary-btn" id="btnCustom" type="button" style="min-height: 46px;" data-i18n="btnCustom">👑 С друзьями</button>
               </div>
             </div>
+            <div id="networkStatus" class="status-chip" role="status" aria-live="polite">Подключаем мультиплеер…</div>
             <div class="mini-note"><span data-i18n="miniNote">В игре 30-секундные превью треков из музыкального каталога.</span><br><span id="catalogStatus" class="status-chip">Проверяем каталог<span class="loading-dots"><i></i><i></i><i></i></span></span></div>
           </div>
         </article>
@@ -98,7 +99,7 @@
       <div id="mpSelection">
          <button class="primary-btn" id="btnCreateRoom" style="width:100%; margin-bottom:15px; background:var(--violet); color:#111;" data-i18n="createRoom">+ Создать комнату</button>
          <div style="display:flex; gap:8px;">
-           <input type="text" id="mpRoomInput" data-i18n-placeholder="roomCodePlaceholder" placeholder="Код комнаты" maxlength="6" style="flex:1; padding:12px; border-radius:12px; border:1px solid var(--line); background:rgba(255,255,255,0.05); color:var(--text); font-size:16px;">
+           <input type="text" id="mpRoomInput" aria-label="Шестизначный код комнаты" autocomplete="off" pattern="[0-9]{6}" data-i18n-placeholder="roomCodePlaceholder" placeholder="Код комнаты" maxlength="6" style="flex:1; padding:12px; border-radius:12px; border:1px solid var(--line); background:rgba(255,255,255,0.05); color:var(--text); font-size:16px;">
            <button class="secondary-btn" id="btnJoinRoom" data-i18n="joinRoom">Войти</button>
          </div>
       </div>
@@ -113,6 +114,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div><audio id="audio" preload="auto"></audio>
-  <script src="game.js"></script>
+  <script src="game.js?v=3.0.1"></script>
 </body>
 </html>

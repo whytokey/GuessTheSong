@@ -172,7 +172,7 @@
   $('playClipBtn').parentNode.appendChild(skipBtn);
   text('questionSub', 'Нажми «Слушать», чтобы включить фрагмент.');
   document.querySelectorAll('[data-i18n="topTitle"]').forEach(el => { el.textContent = 'Таблица рекордов'; });
-  document.querySelectorAll('[data-i18n="miniNote"]').forEach(el => { el.textContent = 'Песни загружаются из папки music на сервере игры.'; });
+  // document.querySelectorAll('[data-i18n="miniNote"]').forEach(el => { el.textContent = 'Песни загружаются из папки music на сервере игры.'; });
   $('mpRoomInput').inputMode = 'numeric';
 
   const sfx = {
@@ -610,7 +610,7 @@
       }).map(track => ({ trackName: track.trackName, artistName: track.artistName, previewUrl: track.previewUrl }));
       if (state.catalog.length < 4) throw new Error('LESS_THAN_FOUR_UNIQUE_TRACKS');
       text('catalogCount', state.catalog.length);
-      text('catalogStatus', `${state.catalog.length} песен в каталоге · звук проверяется перед раундом`);
+      text('catalogStatus', `${state.catalog.length} песен в каталоге`);
       $('catalogStatus').className = 'status-chip online';
       $('startBtn').disabled = false;
     } catch (error) {

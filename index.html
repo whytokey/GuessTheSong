@@ -8,9 +8,8 @@
   
   <title>5 секунд — Угадай песню</title>
   <!-- Подключение SDK Пикабу Игр -->
-  <script src="https://games.pikabu.ru/sdk/sdk.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script async src="https://games.pikabu.ru/sdk/sdk.js" onload="window.dispatchEvent(new Event('pikabu-sdk-ready'))"></script>
+  <script async src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js" onload="var s=document.createElement('script');s.src='https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js';s.onload=function(){window.dispatchEvent(new Event('firebase-ready'));};s.onerror=function(){console.warn('[GuessTheSong] Firebase database script unavailable');};document.head.appendChild(s);"></script>
   <link rel="stylesheet" href="style.css?v=3.0.1">
 </head>
 <body>
@@ -114,6 +113,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div><audio id="audio" preload="auto"></audio>
-  <script src="game.js?v=3.0.1"></script>
+  <script src="game.js?v=3.1.0"></script>
 </body>
 </html>

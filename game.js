@@ -1,11 +1,11 @@
 (() => {
   'use strict';
-  // Release 3.1.0 / room protocol 4. All participants must update together.
-  const PROTOCOL = 4;
+  // Release 3.2.0 / room protocol 5. All participants must update together.
+  const PROTOCOL = 5;
   const CONFIG = Object.freeze({ rounds: 10, clip: 5, lives: 3, roundMs: 45000,
     revealMs: 1600, loadMs: 8000, stallMs: 8000, networkMs: 10000,
     prepareMs: 50000, reconnectMs: 60000, maxReplacements: 2,
-    heartbeatMs: 5000, staleMs: 65000, maxPlayers: 8 });
+    heartbeatMs: 5000, staleMs: 65000, maxPlayers: 8, lookAhead: 2, musicRetryMs: 10000 });
   const $ = id => document.getElementById(id);
   const text = (id, value) => { if ($(id)) $(id).textContent = value; };
   const html = (id, value) => { if ($(id)) $(id).innerHTML = value; };
@@ -142,20 +142,22 @@
     }
     return bounded(request);
   }
-  async function publishMediaStatus(r, status) {
+  async function publishMediaStatus(r, status, permanent = false) {
     if (!r || room !== r || !connected || r.mediaBusy || r.data?.state !== 'playing') return;
     const data = r.data, round = data.round, revision = data.roundRevision, match = data.matchId;
-    if (mediaMatches(data, data.players?.[clientId] || {}, status)) return;
+    if (state.round !== round || state.roundRevision !== revision) return;
+    const me = data.players?.[clientId] || {};
+    if (mediaMatches(data, me, status) || (status === 'ready' && mediaMatches(data, me, 'failed'))) return;
     r.mediaBusy = true;
     try {
       await roomOp(r, `media:${match}:${round}:${revision}:${status}`, current => {
         const p = current?.players?.[clientId];
         if (room !== r || !connected || !p || p.left || current.state !== 'playing' ||
             current.matchId !== match || current.round !== round || current.roundRevision !== revision || current.revealAt) return;
-        if (mediaMatches(current, p, status)) return;
-        p.media = { round, revision, status };
-        if (status === 'failed' && current.phase === 'answering')
-          recordAnswer(p, round, current.sharedQueue[round - 1], null, 'audio_error');
+        if (mediaMatches(current, p, status) || (status === 'ready' && mediaMatches(current, p, 'failed'))) return;
+        p.media = { round, revision, status, permanent: !!permanent };
+        // A media fault is a ROOM event, never a player's answer or a lost round.
+        if (status === 'failed') replaceRoomTrack(current, round - 1, !!permanent);
         return current;
       });
     } catch (error) { roomError(r, error); }
@@ -292,10 +294,16 @@
       });
     }
     trim(keep) {
-      const pinned = state.current?.previewUrl ? this.key(state.current.previewUrl) : '';
+      const pinned = new Set();
+      if (state.current?.previewUrl) pinned.add(this.key(state.current.previewUrl));
+      if (state.active && state.mode === 'mp') {
+        state.queue.slice(Math.max(0, state.round - 1), state.round + CONFIG.lookAhead)
+          .forEach(entry => { if (entry?.answer?.previewUrl) pinned.add(this.key(entry.answer.previewUrl)); });
+      }
+      // At most current + two upcoming files are pinned (each <= maxFile).
       for (const [key] of [...this.entries].sort((a, b) => a[1].used - b[1].used)) {
         if (this.entries.size <= 4 && this.bytes <= this.maxBytes) break;
-        if (key !== keep && key !== pinned) this.drop(key);
+        if (key !== keep && !pinned.has(key)) this.drop(key);
       }
     }
     drop(key) {
@@ -307,7 +315,53 @@
   }
   const media = new MediaCache();
   function warmUpcoming() {
+    if (state.mode === 'mp') return warmRoomTracks(room);
     media.warm(state.queue.slice(state.round, state.round + 2).map(entry => entry.answer || entry));
+  }
+  // Prepare upcoming tracks on EVERY client while the current song is played.
+  // Statuses identify the exact queue entry, not merely its round number.
+  function warmRoomTracks(r) {
+    if (!r || room !== r || !connected || r.data?.state !== 'playing') return;
+    if (!r.preloads) r.preloads = new Map();
+    const data = r.data, match = data.matchId;
+    const upcoming = data.sharedQueue.slice(data.round, data.round + CONFIG.lookAhead);
+    const ids = new Set(upcoming.map(entry => entry.id));
+    for (const id of r.preloads.keys()) if (!ids.has(id)) r.preloads.delete(id);
+    upcoming.forEach(entry => {
+      let job = r.preloads.get(entry.id);
+      if (!job) {
+        job = { status: 'loading' }; r.preloads.set(entry.id, job);
+        media.get(entry.answer.previewUrl).then(() => {
+          if (room !== r || r.preloads.get(entry.id) !== job) return;
+          job.status = 'ready'; publishPreparedTrack(r, match, entry, job);
+        }, error => {
+          if (room !== r || r.preloads.get(entry.id) !== job) return;
+          job.status = 'failed'; job.permanent = !!error.permanent;
+          publishPreparedTrack(r, match, entry, job);
+        });
+      } else if (job.status !== 'loading') publishPreparedTrack(r, match, entry, job);
+    });
+    media.trim();
+  }
+  async function publishPreparedTrack(r, match, entry, job) {
+    if (room !== r || !connected || job.busy || job.status === 'loading') return;
+    if (r.data?.players?.[clientId]?.prepared?.[entry.id]?.status === job.status) return;
+    job.busy = true;
+    try {
+      await roomOp(r, `preload:${match}:${entry.id}:${job.status}`, data => {
+        const p = data?.players?.[clientId];
+        const index = data?.sharedQueue?.findIndex(item => item.id === entry.id);
+        if (room !== r || !connected || !p || p.left || data.state !== 'playing' ||
+            data.matchId !== match || index < data.round - 1 || index > data.round + CONFIG.lookAhead - 1 ||
+            (index === data.round - 1 && data.revealAt)) return;
+        if (!p.prepared) p.prepared = {};
+        if (p.prepared[entry.id]?.status === job.status || p.prepared[entry.id]?.status === 'failed') return;
+        p.prepared[entry.id] = { status: job.status, permanent: !!job.permanent };
+        if (job.status === 'failed') replaceRoomTrack(data, index, !!job.permanent);
+        return data;
+      });
+    } catch (error) { roomError(r, error); }
+    finally { job.busy = false; }
   }
   function mpRoundOpen() {
     return connected && room?.data?.phase === 'answering' && !room.data.revealAt && now() < room.data.deadline;
@@ -356,6 +410,7 @@
   function enableAnswers() {
     answerButtons().forEach((button, i) => {
       button.disabled = !state.heard || state.answered ||
+        (state.mode === 'mp' && (!state.localReady || !mpRoundOpen())) ||
         (state.hintUsed && state.options[i].artistName !== state.current.artistName);
     });
   }
@@ -371,7 +426,8 @@
     text('roundStatus', 'Ждём твоего ответа');
     text('questionSub', 'Нажми «Слушать», чтобы включить фрагмент.');
     text('playClipBtn', 'Подготавливаем звук…'); $('playClipBtn').disabled = true;
-    text('questionSub', 'Подготавливаем фрагмент. Жизни и очки сохраняются.');
+    text('questionSub', state.mode === 'mp' ? 'Скоро следующий фрагмент…' : 'Подготавливаем фрагмент. Жизни и очки сохраняются.');
+    $('answerGrid').style.visibility = state.mode === 'mp' ? 'hidden' : 'visible';
     $('hintBtn').disabled = true; $('timeProgress').style.width = '0%';
     cover(); hud();
     html('answerGrid', options.map((track, index) => `<button class="answer-btn" data-index="${index}" type="button" disabled><span class="answer-letter">${String.fromCharCode(65 + index)}</span><span class="answer-text"><b>${esc(track.trackName)}</b><span>${esc(track.artistName)}</span></span></button>`).join(''));
@@ -414,7 +470,7 @@
       });
       if (!current()) return;
       state.phase = 'ready'; state.localReady = true;
-      text('questionSub', 'Фрагмент загружен. Нажми «Слушать».');
+      text('questionSub', state.mode === 'mp' && !mpRoundOpen() ? 'Скоро следующий фрагмент…' : 'Фрагмент загружен. Нажми «Слушать».');
       text('playClipBtn', '▶ Слушать 5 сек');
       $('playClipBtn').disabled = state.mode === 'mp' && !mpRoundOpen();
       $('hintBtn').disabled = state.mode === 'mp';
@@ -438,9 +494,12 @@
     $('playClipBtn').disabled = true; $('hintBtn').disabled = true;
     text('playClipBtn', 'Восстанавливаем звук…');
     if (state.mode === 'mp') {
-      text('questionSub', 'Готовим общий трек для комнаты. Очки и серия сохраняются.');
-      if (room?.data?.phase === 'buffering') publishMediaStatus(room, 'failed');
-      else if (mpRoundOpen()) submitMp(null, 'audio_error');
+      state.heard = false; state.mediaPermanent = !!error.permanent;
+      answerButtons().forEach(button => { button.disabled = true; });
+      $('answerGrid').style.visibility = 'hidden';
+      text('playClipBtn', 'Подготавливаем звук…');
+      text('questionSub', 'Скоро следующий фрагмент…');
+      publishMediaStatus(room, 'failed', state.mediaPermanent);
       return;
     }
     if (navigator.onLine === false) {
@@ -614,7 +673,7 @@
   }
   function skipTrack() {
     if (!state.active || state.answered || state.adPending) return;
-    if (state.mode === 'mp') return submitMp(null, 'audio_error');
+    if (state.mode === 'mp') return audioFailure(new Error('MEDIA_UNAVAILABLE'), state.token);
     const used = new Set(state.queue.map(trackKey));
     const replacement = shuffle(state.catalog).find(track => !used.has(trackKey(track)) && !state.badUrls.has(track.previewUrl));
     if (replacement && state.replacements < CONFIG.maxReplacements) {
@@ -730,12 +789,12 @@
     enableAnswers();
   }
 
-  // Firebase protocol 4. Every normal room write is one root transaction.
+  // Firebase protocol 5. Every normal room write is one root transaction.
   // Never use set/update/child transactions inside this subtree: they can cancel
   // pending ancestor transactions in the Firebase client.
   // This is reliability logic, NOT anti-cheat; production authorization belongs in RTDB rules/backend.
   function networkButtons() {
-    text('networkStatus', connected && db ? 'Мультиплеер подключён · версия 3.1.0' :
+    text('networkStatus', connected && db ? 'Мультиплеер подключён · версия 3.2.0' :
       db ? 'Мультиплеер: подключаемся к серверу…' : 'Мультиплеер недоступен: сервер не подключён. Одиночная игра работает.');
     if ($('networkStatus')) $('networkStatus').className = `status-chip ${connected && db ? 'online' : 'warn'}`;
     ['btn1v1', 'btnCustom'].forEach(id => {
@@ -961,17 +1020,21 @@
     }
     hud();
     const answer = me.answers?.[String(data.round)];
+    warmRoomTracks(r);
     if (data.phase === 'buffering' && !data.revealAt) {
       $('playClipBtn').disabled = true;
-      text('roundStatus', 'Синхронизируем звук у игроков…');
-      if (state.localReady) {
-        text('questionSub', 'Твой фрагмент загружен. Ждём готовности комнаты.');
-        publishMediaStatus(r, 'ready');
-      } else if (state.phase === 'error') publishMediaStatus(r, 'failed');
+      $('answerGrid').style.visibility = 'hidden';
+      text('roundStatus', 'Готовим следующий раунд…');
+      text('questionSub', data.musicRetryAt ? 'Ожидаем доступную музыку. Очки и серия сохранены.' : 'Скоро следующий фрагмент…');
+      if (state.localReady) publishMediaStatus(r, 'ready');
+      else if (state.phase === 'error') publishMediaStatus(r, 'failed', state.mediaPermanent);
       roomTick(r); return;
     }
-    if (!answer && !data.revealAt && state.phase === 'ready' && state.localReady)
+    if (state.localReady) $('answerGrid').style.visibility = 'visible';
+    if (!answer && !data.revealAt && state.phase === 'ready' && state.localReady) {
+      text('questionSub', 'Фрагмент загружен. Нажми «Слушать».');
       $('playClipBtn').disabled = !mpRoundOpen();
+    }
     if (answer) {
       state.answered = true; stopAudio(); state.phase = 'answered'; enableAnswers();
       $('playClipBtn').disabled = true; $('hintBtn').disabled = true; skipBtn.hidden = true;
@@ -1003,18 +1066,27 @@
     if (activePlayers(r.data).length < 2) return toast('Нужно хотя бы два игрока.');
     if (state.catalog.length < 4) return toast('Каталог ещё не готов.');
     r.starting = true; $('btnStartMp').disabled = true; text('btnStartMp', 'Запускаем матч…');
-    const candidates = shuffle(state.catalog);
-    const queue = candidates.slice(0, CONFIG.rounds).map(answer => ({ answer, options: optionsFor(answer) }));
-    const reserves = candidates.slice(CONFIG.rounds, CONFIG.rounds * 3).map(answer => ({ answer, options: optionsFor(answer) }));
+    // Store the complete candidate pool once. No limit of two replacements and
+    // no short reserve list that can turn ten rounds into ten silent skips.
+    const urls = new Set();
+    const candidates = shuffle(state.catalog).filter(track => {
+      const key = media.key(track.previewUrl);
+      if (urls.has(key)) return false;
+      urls.add(key); return true;
+    });
+    const queue = candidates.slice(0, CONFIG.rounds).map((answer, asset) =>
+      ({ id: `slot${asset}v0`, asset, answer, options: optionsFor(answer) }));
     const matchId = uid();
     try {
       const result = await bounded(roomTransaction(r.ref, data => {
         if (room !== r || !connected || !data || data.protocol !== PROTOCOL || data.state !== 'waiting' || data.host !== clientId || activePlayers(data).length < 2) return;
         data.state = 'playing'; data.matchId = matchId; data.sharedQueue = queue;
-        data.reserves = reserves; data.reserveCursor = 0; data.neutralStreak = 0;
-        data.round = 1; data.roundRevision = 1; beginBuffering(data);
+        data.trackPool = candidates; data.poolCursor = queue.length;
+        data.disabledTracks = {}; data.trackCooldowns = {}; data.goodTracks = {};
+        data.entrySerial = 0; data.round = 1; data.roundRevision = 1; beginBuffering(data);
         Object.values(data.players || {}).forEach(p => {
-          p.score = 0; p.streak = 0; p.bestStreak = 0; p.correct = 0; delete p.answers; delete p.media;
+          p.score = 0; p.streak = 0; p.bestStreak = 0; p.correct = 0;
+          delete p.answers; delete p.media; delete p.prepared;
         }); return data;
       }));
       if (room === r && !result.committed) {
@@ -1075,7 +1147,95 @@
   function beginBuffering(data, advanceRevision = false) {
     if (advanceRevision) data.roundRevision = Number(data.roundRevision || 0) + 1;
     data.phase = 'buffering'; data.bufferUntil = now() + CONFIG.prepareMs;
-    data.bufferAttempt = number(data.bufferAttempt); data.deadline = 0; data.revealAt = 0;
+    data.deadline = 0; data.revealAt = 0;
+    delete data.musicRetryAt; delete data.roundBaseline;
+  }
+  const scoreFields = ['score', 'streak', 'bestStreak', 'correct'];
+  function rememberRoundScores(data) {
+    const players = {};
+    Object.entries(data.players || {}).forEach(([id, p]) => {
+      players[id] = {};
+      scoreFields.forEach(key => { players[id][key] = number(p[key]); });
+    });
+    data.roundBaseline = { round: data.round, players };
+  }
+  function rollbackMediaRound(data) {
+    Object.entries(data.players || {}).forEach(([id, p]) => {
+      const baseline = data.roundBaseline?.round === data.round ? data.roundBaseline.players?.[id] : null;
+      if (baseline) scoreFields.forEach(key => { p[key] = number(baseline[key]); });
+      if (p.answers) delete p.answers[String(data.round)];
+    });
+  }
+  function roomTrackOptions(data, asset) {
+    // Deterministic inside a retryable Firebase transaction: answer and options
+    // are committed atomically, and never selected independently by clients.
+    const pool = data.trackPool, answer = pool[asset], options = [answer];
+    const seen = new Set([trackKey(answer)]);
+    for (let step = 1; step < pool.length && options.length < 4; step++) {
+      const track = pool[(asset + step) % pool.length], key = trackKey(track);
+      if (!seen.has(key)) { seen.add(key); options.push(track); }
+    }
+    const offset = number(data.entrySerial) % options.length;
+    return options.slice(offset).concat(options.slice(0, offset));
+  }
+  function nextRoomAsset(data, index) {
+    const pool = data.trackPool || [];
+    const used = new Set(data.sharedQueue.slice(data.round - 1)
+      .filter((_, offset) => offset + data.round - 1 !== index).map(entry => entry.asset));
+    const available = asset => pool[asset] && !data.disabledTracks?.[asset] &&
+      Number(data.trackCooldowns?.[asset] || 0) <= now();
+    const allowed = asset => available(asset) && !used.has(asset);
+    let cursor = number(data.poolCursor);
+    while (cursor < pool.length) {
+      const asset = cursor++; data.poolCursor = cursor;
+      if (allowed(asset)) return asset;
+    }
+    // A small real catalog may have fewer working songs than rounds. Reuse a
+    // verified song instead of consuming a silent round or ending the match.
+    const verified = Object.keys(data.goodTracks || {}).map(Number);
+    const known = verified.find(allowed) ?? verified.find(available);
+    if (known !== undefined) return known;
+    // Transient failures are retried after cooldown, permanent 404/decode errors
+    // remain excluded for the whole room session. With a tiny catalog a future
+    // slot may hold the only viable track: sharing it is better than deadlock.
+    const retry = Object.keys(data.trackCooldowns || {}).map(Number).find(allowed);
+    if (retry !== undefined) return retry;
+    return pool.findIndex((_, asset) => available(asset));
+  }
+  function replaceRoomTrack(data, index, permanent = false, markFailure = true) {
+    const old = data.sharedQueue?.[index];
+    if (!old || index < data.round - 1) return false;
+    if (markFailure) {
+      if (permanent) {
+        if (!data.disabledTracks) data.disabledTracks = {};
+        data.disabledTracks[old.asset] = true;
+      } else {
+        if (!data.trackCooldowns) data.trackCooldowns = {};
+        data.trackCooldowns[old.asset] = now() + CONFIG.reconnectMs;
+      }
+      if (data.goodTracks) delete data.goodTracks[old.asset];
+    }
+    const isCurrent = index === data.round - 1;
+    let restarted = false;
+    if (isCurrent && data.phase === 'answering') {
+      rollbackMediaRound(data); beginBuffering(data, true); restarted = true;
+    }
+    const asset = nextRoomAsset(data, index);
+    if (asset < 0) {
+      if (isCurrent) data.musicRetryAt = now() + CONFIG.musicRetryMs;
+      return restarted;
+    }
+    data.entrySerial = number(data.entrySerial) + 1;
+    data.sharedQueue[index] = { id: `slot${index}v${data.entrySerial}`, asset,
+      answer: data.trackPool[asset], options: roomTrackOptions(data, asset) };
+    Object.values(data.players || {}).forEach(p => {
+      if (p.prepared) delete p.prepared[old.id];
+    });
+    if (isCurrent) {
+      if (!restarted) beginBuffering(data, true);
+      else delete data.musicRetryAt;
+    }
+    return true;
   }
   // Run transitions only inside a root RTDB transaction.
   function progressRoom(current) {
@@ -1090,41 +1250,48 @@
         current.state = 'finished'; current.finishedAt = now();
       } else {
         current.round++; beginBuffering(current, true);
+        const keep = new Set(current.sharedQueue.slice(current.round - 1,
+          current.round + CONFIG.lookAhead).map(entry => entry.id));
+        Object.values(current.players || {}).forEach(p => {
+          Object.keys(p.prepared || {}).forEach(id => { if (!keep.has(id)) delete p.prepared[id]; });
+        });
       }
       return true;
     }
     const entry = current.sharedQueue?.[current.round - 1];
-    if (!entry) return changed;
+    if (!entry || !participants.length) return changed;
+    // Failure has priority over allReady, allAnswered and the answer deadline.
+    const failed = participants.map(([, p]) => mediaMatches(current, p, 'failed') ? p.media :
+      p.prepared?.[entry.id]?.status === 'failed' ? p.prepared[entry.id] : null).filter(Boolean);
+    if (current.musicRetryAt && now() < current.musicRetryAt) return changed;
+    if (failed.length || current.disabledTracks?.[entry.asset]) {
+      replaceRoomTrack(current, current.round - 1,
+        !!current.disabledTracks?.[entry.asset] || failed.some(item => item.permanent), !current.musicRetryAt);
+      return true;
+    }
     if (current.phase === 'buffering') {
-      // Disconnected players can catch up from the shared room state after reconnect.
-      const allReady = live.length > 0 && live.every(([, p]) => mediaMatches(current, p, 'ready'));
+      // A short disconnect does not allow the room to start without that player.
+      // After staleMs an absent participant no longer holds up the room.
+      const allReady = participants.every(([, p]) => p.online !== false && mediaMatches(current, p, 'ready'));
       if (allReady) {
         current.phase = 'answering'; current.deadline = now() + CONFIG.roundMs;
-        current.neutralStreak = 0; return true;
+        if (!current.goodTracks) current.goodTracks = {};
+        current.goodTracks[entry.asset] = true;
+        rememberRoundScores(current); delete current.musicRetryAt; return true;
       }
-      const failed = live.some(([, p]) => mediaMatches(current, p, 'failed'));
-      if (!failed && now() < Number(current.bufferUntil || 0)) return changed;
-      const replacement = current.reserves?.[number(current.reserveCursor)];
-      if (replacement && number(current.bufferAttempt) < CONFIG.maxReplacements) {
-        current.sharedQueue[current.round - 1] = replacement;
-        current.reserveCursor = number(current.reserveCursor) + 1;
-        current.bufferAttempt = number(current.bufferAttempt) + 1;
-        beginBuffering(current, true); return true;
+      if (now() < Number(current.bufferUntil || 0)) return changed;
+      if (participants.some(([, p]) => p.online === false)) {
+        current.bufferUntil = now() + CONFIG.musicRetryMs; return true;
       }
-      Object.values(current.players || {}).forEach(p => {
-        if (!p.left) recordAnswer(p, current.round, entry, null, 'audio_error');
-      });
-      current.neutralStreak = number(current.neutralStreak) + 1;
-      current.revealAt = now() + CONFIG.revealMs; return true;
+      replaceRoomTrack(current, current.round - 1, false, true); return true;
     }
     if (current.phase !== 'answering') return changed;
-    // A transient onDisconnect must not finish a round early.
-    const allAnswered = participants.length > 0 && participants.every(([, p]) => !!p.answers?.[String(current.round)]);
+    const allAnswered = participants.every(([, p]) => !!p.answers?.[String(current.round)]);
     if (allAnswered || now() >= Number(current.deadline || 0)) {
       Object.values(current.players || {}).forEach(p => {
         if (p.left || p.answers?.[String(current.round)]) return;
-        const reason = p.online === false ? 'network_error' :
-          mediaMatches(current, p, 'failed') || !mediaMatches(current, p, 'ready') ? 'audio_error' : 'timeout';
+        const reason = p.online === false || now() - Number(p.lastSeen || 0) >= CONFIG.staleMs ? 'network_error' :
+          !mediaMatches(current, p, 'ready') ? 'audio_error' : 'timeout';
         recordAnswer(p, current.round, entry, null, reason);
       });
       current.revealAt = now() + CONFIG.revealMs; return true;
@@ -1137,16 +1304,17 @@
     if (data.state === 'playing' && state.active && !data.revealAt) {
       if (data.phase === 'answering') {
         if (!state.answered) text('roundStatus', `На ответ: ${Math.max(0, Math.ceil((data.deadline - now()) / 1000))} сек`);
-        if (state.phase === 'error') publishMediaStatus(r, 'failed');
+        if (state.phase === 'error') publishMediaStatus(r, 'failed', state.mediaPermanent);
         const intent = r.answerIntent;
         if (intent && r.submitting === null && intent.round === data.round && intent.revision === data.roundRevision &&
             (intent.reason !== 'answer' || now() < data.deadline)) submitMp(intent.index, intent.reason, true);
       } else if (data.phase === 'buffering') {
-        text('roundStatus', 'Синхронизируем звук у игроков…');
+        text('roundStatus', 'Готовим следующий раунд…');
         if (state.localReady) publishMediaStatus(r, 'ready');
-        else if (state.phase === 'error') publishMediaStatus(r, 'failed');
+        else if (state.phase === 'error') publishMediaStatus(r, 'failed', state.mediaPermanent);
       }
     }
+    if (data.state === 'playing') warmRoomTracks(r);
     if (!['waiting', 'playing'].includes(data.state)) return;
     // Avoid RTDB writes on each 400ms tick when no transition is due.
     const preview = JSON.parse(JSON.stringify(data));
@@ -1161,51 +1329,6 @@
         return progressRoom(current) ? current : undefined;
       });
       r.retryAt = 0;
-    } catch (error) { roomError(r, error); }
-    finally { r.pending = false; }
-  }
-  async function roomTick(r) {
-    if (room !== r || !connected || !r.data || r.pending || r.finished) return;
-    const data = r.data;
-    if (data.state === 'playing' && state.active && !state.answered) {
-      const seconds = Math.max(0, Math.ceil((data.deadline - now()) / 1000));
-      text('roundStatus', `На ответ: ${seconds} сек`);
-    }
-    const live = activePlayers(data), ids = live.map(([id]) => id).sort();
-    const hostMissing = !ids.includes(data.host);
-    const allAnswered = live.length > 0 && live.every(([, p]) => !!p.answers?.[String(data.round)]);
-    const needsStep = data.state === 'playing' && (data.revealAt ? now() >= data.revealAt : allAnswered || now() >= data.deadline);
-    if (!hostMissing && !needsStep) return;
-    if (data.state !== 'waiting' && data.state !== 'playing') return;
-    r.pending = true;
-    const expectedRound = data.round || 0, matchId = data.matchId || null;
-    try {
-      // Any connected participant may progress a round: the host is not a single point of failure.
-      await bounded(roomTransaction(r.ref, current => {
-        if (room !== r || !connected || !current || !current.players?.[clientId] || current.state !== data.state ||
-            (current.matchId || null) !== matchId || (current.round || 0) !== expectedRound) return;
-        let changed = false;
-        const active = activePlayers(current), keys = active.map(([id]) => id).sort();
-        if (!keys.includes(current.host) && keys.length) { current.host = keys[0]; changed = true; }
-        if (current.state === 'playing') {
-          if (current.revealAt) {
-            if (now() >= current.revealAt) {
-              if (current.round >= current.sharedQueue.length) { current.state = 'finished'; current.finishedAt = now(); }
-              else { current.round++; current.deadline = now() + CONFIG.roundMs; current.revealAt = 0; }
-              changed = true;
-            }
-          } else {
-            const done = active.length > 0 && active.every(([, p]) => !!p.answers?.[String(current.round)]);
-            if (done || now() >= current.deadline) {
-              // Finalize missing answers for ALL registered participants, including disconnected ones.
-              Object.values(current.players || {}).forEach(p => recordAnswer(p, current.round,
-                current.sharedQueue[current.round - 1], null, 'timeout'));
-              current.revealAt = now() + CONFIG.revealMs; changed = true;
-            }
-          }
-        }
-        return changed ? current : undefined;
-      }));
     } catch (error) { roomError(r, error); }
     finally { r.pending = false; }
   }

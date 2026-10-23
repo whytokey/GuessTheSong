@@ -2,10 +2,12 @@
   'use strict';
   // Release 3.2.0 / room protocol 5. All participants must update together.
   const PROTOCOL = 5;
-  const CONFIG = Object.freeze({ rounds: 10, clip: 5, lives: 3, roundMs: 45000,
+  const CONFIG = Object.freeze({
+    rounds: 10, clip: 5, lives: 3, roundMs: 45000,
     revealMs: 1600, loadMs: 8000, stallMs: 8000, networkMs: 10000,
     prepareMs: 50000, reconnectMs: 60000, maxReplacements: 2,
-    heartbeatMs: 5000, staleMs: 65000, maxPlayers: 8, lookAhead: 2, musicRetryMs: 10000 });
+    heartbeatMs: 5000, staleMs: 65000, maxPlayers: 8, lookAhead: 2, musicRetryMs: 10000
+  });
   const $ = id => document.getElementById(id);
   const text = (id, value) => { if ($(id)) $(id).textContent = value; };
   const html = (id, value) => { if ($(id)) $(id).innerHTML = value; };
@@ -30,6 +32,33 @@
   };
   const trackKey = track => `${track?.trackName || ''}::${track?.artistName || ''}`.normalize('NFKC').toLowerCase();
   const multiplier = streak => streak >= 5 ? 3 : streak >= 3 ? 2 : 1;
+
+  // Список для автоматического определения иноагентов в вариантах ответа
+  const FOREIGN_AGENTS = [
+    'noize mc',
+    'oxxxymiron',
+    'земфира',
+    'би-2',
+    'борис гребенщиков',
+    'аквариум',
+    'ногу свело',
+    'моргенштерн',
+    'morgenshtern',
+    'монеточка',
+    'фейс',
+    'face',
+    'little big',
+    'порнофильмы',
+    'анакондаз',
+    'anacondaz',
+    'каста'
+  ];
+
+  function isForeignAgent(artistName) {
+    const lower = String(artistName || '').toLowerCase();
+    return FOREIGN_AGENTS.some(agent => lower.includes(agent));
+  }
+
   function bounded(promise, ms = CONFIG.networkMs) {
     let timer;
     return Promise.race([Promise.resolve(promise), new Promise((_, reject) => {
@@ -153,7 +182,7 @@
       await roomOp(r, `media:${match}:${round}:${revision}:${status}`, current => {
         const p = current?.players?.[clientId];
         if (room !== r || !connected || !p || p.left || current.state !== 'playing' ||
-            current.matchId !== match || current.round !== round || current.roundRevision !== revision || current.revealAt) return;
+          current.matchId !== match || current.round !== round || current.roundRevision !== revision || current.revealAt) return;
         if (mediaMatches(current, p, status) || (status === 'ready' && mediaMatches(current, p, 'failed'))) return;
         p.media = { round, revision, status, permanent: !!permanent };
         // A media fault is a ROOM event, never a player's answer or a lost round.
@@ -170,6 +199,13 @@
   skipBtn.id = 'skipTrackBtn'; skipBtn.type = 'button'; skipBtn.className = 'sound-btn';
   skipBtn.textContent = 'Пропустить трек'; skipBtn.hidden = true;
   $('playClipBtn').parentNode.appendChild(skipBtn);
+
+  // Плашка для маркировки иноагентов (показывается только когда они есть в вариантах)
+  const agentNotice = document.createElement('div');
+  agentNotice.id = 'foreignAgentNotice';
+  agentNotice.style.cssText = 'display:none; margin-top:12px; padding:8px 12px; border-radius:10px; background:rgba(255,194,102,0.08); border:1px solid rgba(255,194,102,0.25); color:var(--muted); font-size:11px; line-height:1.35; text-align:left;';
+  $('answerGrid').insertAdjacentElement('afterend', agentNotice);
+
   text('questionSub', 'Нажми «Слушать», чтобы включить фрагмент.');
   document.querySelectorAll('[data-i18n="topTitle"]').forEach(el => { el.textContent = 'Таблица рекордов'; });
   // document.querySelectorAll('[data-i18n="miniNote"]').forEach(el => { el.textContent = 'Песни загружаются из папки music на сервере игры.'; });
@@ -234,8 +270,10 @@
         const timer = setTimeout(() => controller.abort(), CONFIG.loadMs);
         try {
           if (navigator.onLine === false) throw new Error('OFFLINE');
-          const response = await fetch(key, { signal: controller.signal,
-            cache: attempt ? 'reload' : 'default', credentials: 'same-origin' });
+          const response = await fetch(key, {
+            signal: controller.signal,
+            cache: attempt ? 'reload' : 'default', credentials: 'same-origin'
+          });
           if (!response.ok) {
             const e = new Error(`AUDIO_HTTP_${response.status}`);
             e.permanent = [400, 401, 403, 404, 410].includes(response.status); throw e;
@@ -250,7 +288,7 @@
           if (response.body?.getReader) {
             const reader = response.body.getReader(), chunks = []; let size = 0;
             try {
-              for (;;) {
+              for (; ;) {
                 const { done, value } = await reader.read(); if (done) break;
                 size += value.byteLength;
                 if (size > this.maxFile) { controller.abort(); throw tooLarge(); }
@@ -352,8 +390,8 @@
         const p = data?.players?.[clientId];
         const index = data?.sharedQueue?.findIndex(item => item.id === entry.id);
         if (room !== r || !connected || !p || p.left || data.state !== 'playing' ||
-            data.matchId !== match || index < data.round - 1 || index > data.round + CONFIG.lookAhead - 1 ||
-            (index === data.round - 1 && data.revealAt)) return;
+          data.matchId !== match || index < data.round - 1 || index > data.round + CONFIG.lookAhead - 1 ||
+          (index === data.round - 1 && data.revealAt)) return;
         if (!p.prepared) p.prepared = {};
         if (p.prepared[entry.id]?.status === job.status || p.prepared[entry.id]?.status === 'failed') return;
         p.prepared[entry.id] = { status: job.status, permanent: !!job.permanent };
@@ -430,7 +468,21 @@
     $('answerGrid').style.visibility = state.mode === 'mp' ? 'hidden' : 'visible';
     $('hintBtn').disabled = true; $('timeProgress').style.width = '0%';
     cover(); hud();
-    html('answerGrid', options.map((track, index) => `<button class="answer-btn" data-index="${index}" type="button" disabled><span class="answer-letter">${String.fromCharCode(65 + index)}</span><span class="answer-text"><b>${esc(track.trackName)}</b><span>${esc(track.artistName)}</span></span></button>`).join(''));
+    // html('answerGrid', options.map((track, index) => `<button class="answer-btn" data-index="${index}" type="button" disabled><span class="answer-letter">${String.fromCharCode(65 + index)}</span><span class="answer-text"><b>${esc(track.trackName)}</b><span>${esc(track.artistName)}</span></span></button>`).join(''));
+
+    const hasAgentInOptions = options.some(track => isForeignAgent(track.artistName));
+    html('answerGrid', options.map((track, index) => {
+      const mark = isForeignAgent(track.artistName) ? ' *' : '';
+      return `<button class="answer-btn" data-index="${index}" type="button" disabled><span class="answer-letter">${String.fromCharCode(65 + index)}</span><span class="answer-text"><b>${esc(track.trackName)}</b><span>${esc(track.artistName + mark)}</span></span></button>`;
+    }).join(''));
+
+    if (hasAgentInOptions) {
+      agentNotice.textContent = '* В вариантах ответа упомянут исполнитель (или участник коллектива), признанный в РФ иностранным агентом (18+).';
+      agentNotice.style.display = 'block';
+    } else {
+      agentNotice.style.display = 'none';
+    }
+
     // Fresh media node isolates late events and old play() promises on WebKit/Chromium.
     const fresh = document.createElement('audio');
     fresh.id = 'audio'; fresh.preload = 'auto'; fresh.volume = audio.volume;
@@ -516,7 +568,7 @@
   }
   async function playClip() {
     if (!state.active || state.answered || state.adPending || adShowing ||
-        ['preparing', 'loading', 'playing', 'error', 'offline'].includes(state.phase)) return;
+      ['preparing', 'loading', 'playing', 'error', 'offline'].includes(state.phase)) return;
     if (pauseReasons.size || document.hidden) { toast('Вернись в игру, чтобы включить звук.'); return; }
     if (state.mode === 'mp' && !mpRoundOpen()) return;
     const token = state.token, node = audio;
@@ -601,7 +653,7 @@
       const seen = new Set();
       state.catalog = data.filter(track => {
         if (!track || typeof track.trackName !== 'string' || typeof track.artistName !== 'string' ||
-            typeof track.previewUrl !== 'string' || !track.previewUrl.trim()) return false;
+          typeof track.previewUrl !== 'string' || !track.previewUrl.trim()) return false;
         let url;
         try { url = new URL(track.previewUrl, document.baseURI); } catch (_) { return false; }
         if (!['https:', 'http:'].includes(url.protocol)) return false;
@@ -621,9 +673,11 @@
   }
   function resetGame(mode, queue) {
     endSession();
-    Object.assign(state, { active: true, mode, queue, round: 0, score: 0, streak: 0,
+    Object.assign(state, {
+      active: true, mode, queue, round: 0, score: 0, streak: 0,
       bestStreak: 0, correct: 0, lives: CONFIG.lives, answered: false, heard: false,
-      reviveUsed: false, hintUsed: false, replacements: 0, badUrls: new Set() });
+      reviveUsed: false, hintUsed: false, replacements: 0, badUrls: new Set()
+    });
     $('mpScoreBoard').style.display = mode === 'mp' ? 'block' : 'none';
     $('formulaCard').style.display = mode === 'mp' ? 'none' : 'block';
     $('catalogCard').style.display = mode === 'mp' ? 'none' : 'block';
@@ -784,7 +838,9 @@
       answerButtons().forEach((button, i) => {
         if (state.options[i].artistName !== state.current.artistName) button.style.opacity = '.35';
       });
-      toast(`Исполнитель — ${state.current.artistName}`);
+      // toast(`Исполнитель — ${state.current.artistName}`);
+      const mark = isForeignAgent(state.current.artistName) ? ' (признан в РФ иноагентом)' : '';
+      toast(`Исполнитель — ${state.current.artistName}${mark}`);
     } else { $('hintBtn').disabled = false; toast('Реклама недоступна.'); }
     enableAnswers();
   }
@@ -862,8 +918,10 @@
     text('mpTitle', r.type === '1v1' ? 'Поиск 1 на 1…' : 'Своя игра');
     $('mpModal').classList.add('open');
   }
-  const playerRecord = () => ({ name: currentName(), online: true, lastSeen: now(),
-    score: 0, streak: 0, bestStreak: 0, correct: 0 });
+  const playerRecord = () => ({
+    name: currentName(), online: true, lastSeen: now(),
+    score: 0, streak: 0, bestStreak: 0, correct: 0
+  });
   async function createRoom(type, task) {
     for (let attempt = 0; attempt < 6; attempt++) {
       if (task !== lobbyTask || !connected) throw new Error('CANCELLED');
@@ -871,8 +929,10 @@
       const ref = db.ref(`rooms/${id}`);
       const result = await transactWithRollback(ref, data => {
         if (task !== lobbyTask || !connected || data !== null) return;
-        return { protocol: PROTOCOL, type, state: 'waiting', host: clientId, createdAt: now(),
-          players: { [clientId]: playerRecord() } };
+        return {
+          protocol: PROTOCOL, type, state: 'waiting', host: clientId, createdAt: now(),
+          players: { [clientId]: playerRecord() }
+        };
       }, () => removeCancelledParticipant(ref), 'Room creation');
       if (result.committed) {
         if (task !== lobbyTask) {
@@ -922,7 +982,7 @@
       if (task === lobbyTask) toast(/permission|denied/i.test(String(error.code || error.message)) ?
         'Firebase запретил доступ к комнатам. Нужна проверка правил базы владельцем игры.' :
         error.message === 'TIMEOUT' ? 'Сервер не ответил вовремя. Проверь подключение.' :
-        error.message === 'CANCELLED' ? 'Подключение отменено.' : error.message);
+          error.message === 'CANCELLED' ? 'Подключение отменено.' : error.message);
     } finally { if (task === lobbyTask) lobbyControls(false); }
   }
   async function matchmaking(task) {
@@ -967,8 +1027,10 @@
     endSession();
     // A new room must not inherit an outstanding answer or platform pause.
     resumeAudio('network');
-    const r = { id, type, ref: db.ref(`rooms/${id}`), epoch: ++roomEpoch, data: null,
-      pending: false, starting: false, submitting: null, heartbeatBusy: false, matchId: null, finished: false };
+    const r = {
+      id, type, ref: db.ref(`rooms/${id}`), epoch: ++roomEpoch, data: null,
+      pending: false, starting: false, submitting: null, heartbeatBusy: false, matchId: null, finished: false
+    };
     room = r; displayLobby(r);
     r.listener = snap => {
       if (room !== r) return;
@@ -1042,7 +1104,7 @@
       if (answer.reason !== 'audio_error') markAnswer(Number.isInteger(answer.index) ? answer.index : -1, !!answer.correct);
       text('questionSub', answer.reason === 'audio_error' ? 'Звук недоступен: трек пропущен без потери очков.' :
         answer.reason === 'network_error' ? 'Связь прервалась: трек пропущен без штрафа.' :
-        answer.reason === 'timeout' ? 'Время ответа вышло.' : answer.correct ? `Верно! +${answer.points} очков` : `Это «${state.current.trackName}».`);
+          answer.reason === 'timeout' ? 'Время ответа вышло.' : answer.correct ? `Верно! +${answer.points} очков` : `Это «${state.current.trackName}».`);
       text('roundStatus', data.revealAt ? 'Следующий раунд…' : 'Ответ принят. Ждём остальных…');
     } else if (data.revealAt) {
       state.answered = true; stopAudio(); enableAnswers(); $('playClipBtn').disabled = true; skipBtn.hidden = true;
@@ -1126,8 +1188,8 @@
     try {
       const result = await roomOp(r, `answer:${matchId}:${round}:${revision}`, data => {
         if (room !== r || !connected || !data || data.state !== 'playing' || data.matchId !== matchId ||
-            data.round !== round || data.roundRevision !== revision || data.phase !== 'answering' ||
-            data.revealAt || !data.players?.[clientId] || data.players[clientId].left) return;
+          data.round !== round || data.roundRevision !== revision || data.phase !== 'answering' ||
+          data.revealAt || !data.players?.[clientId] || data.players[clientId].left) return;
         const entry = data.sharedQueue[round - 1];
         if (reason === 'answer' && (now() >= data.deadline || !Number.isInteger(index) || !entry.options[index])) return;
         if (data.players[clientId].answers?.[String(round)]) return;
@@ -1226,8 +1288,10 @@
       return restarted;
     }
     data.entrySerial = number(data.entrySerial) + 1;
-    data.sharedQueue[index] = { id: `slot${index}v${data.entrySerial}`, asset,
-      answer: data.trackPool[asset], options: roomTrackOptions(data, asset) };
+    data.sharedQueue[index] = {
+      id: `slot${index}v${data.entrySerial}`, asset,
+      answer: data.trackPool[asset], options: roomTrackOptions(data, asset)
+    };
     Object.values(data.players || {}).forEach(p => {
       if (p.prepared) delete p.prepared[old.id];
     });
@@ -1307,7 +1371,7 @@
         if (state.phase === 'error') publishMediaStatus(r, 'failed', state.mediaPermanent);
         const intent = r.answerIntent;
         if (intent && r.submitting === null && intent.round === data.round && intent.revision === data.roundRevision &&
-            (intent.reason !== 'answer' || now() < data.deadline)) submitMp(intent.index, intent.reason, true);
+          (intent.reason !== 'answer' || now() < data.deadline)) submitMp(intent.index, intent.reason, true);
       } else if (data.phase === 'buffering') {
         text('roundStatus', 'Готовим следующий раунд…');
         if (state.localReady) publishMediaStatus(r, 'ready');
@@ -1324,8 +1388,8 @@
     try {
       await roomOp(r, 'step', current => {
         if (room !== r || !connected || !current || !current.players?.[clientId] || current.players[clientId].left ||
-            current.state !== data.state || (current.matchId || null) !== matchId ||
-            (current.round || 0) !== expectedRound || (current.roundRevision || 0) !== revision) return;
+          current.state !== data.state || (current.matchId || null) !== matchId ||
+          (current.round || 0) !== expectedRound || (current.roundRevision || 0) !== revision) return;
         return progressRoom(current) ? current : undefined;
       });
       r.retryAt = 0;
